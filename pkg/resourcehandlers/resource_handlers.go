@@ -57,6 +57,15 @@ type ResourceHandler interface {
 	// GetRateLimit returns rate limit and remaining API calls for the resource handler backend (e.g. GitHub RateLimit)
 	// returns negative values if RateLimit is not applicable
 	GetRateLimit(ctx context.Context) (int, int, time.Time, error)
+
+	// GetDefaultBranch returns repo default branch for given URI
+	GetDefaultBranch(ctx context.Context, uri string) (string, error)
+	// GetRepoLastNTags returns repo last N version for given URI sorted in descending order
+	GetRepoLastNTags(ctx context.Context, uri string, n int) ([]string, error)
+	// GetRepoURL returns repo URL for given URI
+	GetRepoURL(ctx context.Context, uri string) (string, error)
+	// ResolveDocumentationModuleVersion returns
+	ResolveDocumentationModuleVersion(ctx context.Context, path string, ver string) (*api.Documentation, error)
 }
 
 // Registry can register and return resource handlers for an url

@@ -166,7 +166,7 @@ func ClearDefaultBranchesCache() {
 	defaultBranches = nil
 }
 
-// GetDefaultBranch gets the default branch from a given recource handler
+// GetDefaultBranch gets the default branch from a given recourse handler
 func GetDefaultBranch(ctx context.Context, client *ghclient.Client, rl *ResourceLocator) (string, error) {
 	mux.Lock()
 	defer mux.Unlock()

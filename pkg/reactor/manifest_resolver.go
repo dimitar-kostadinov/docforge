@@ -96,11 +96,19 @@ func (r *Reactor) resolveNodeSelector(ctx context.Context, node *api.Node, visit
 	var err error
 	// if path points to manifest then resolve documentation, otherwise nil will be returned
 	var manifest *api.Documentation
+
+	// TODO: distinguish between module manifest and folder (e.g. blob suppose to be module manifest, tree should be a folder)
+	// TODO: resource handler with 2 methods - 1 for manifest.yaml and - 2 for folders
+	// TODO: how to verify default branch
+	// TODO: what if branch is not master but v.N.N.N ?
+	// TODO: standard for modules ??? repo/.docforge/manifest.yaml ???
+
 	manifest, err = rh.ResolveDocumentation(ctx, node.NodeSelector.Path)
 	if err != nil {
 		err = fmt.Errorf("failed to resolve imported documentation manifest for node %s with path %s: %v", node.FullName("/"), node.NodeSelector.Path, err)
 		return nil, err
 	}
+	//manifestCopy := copyManifest(manifest)
 	if manifest != nil {
 		if isVisited(visited, node.NodeSelector.Path) {
 			visited = append(visited, node.NodeSelector.Path)
@@ -129,6 +137,110 @@ func (r *Reactor) resolveNodeSelector(ctx context.Context, node *api.Node, visit
 				return nil, err
 			}
 		}
+		// Check if versions are applied to the module manifest and add versions accordingly
+		var repoURL string
+		repoURL, err = rh.GetRepoURL(ctx, node.NodeSelector.Path)
+		if err != nil {
+			return nil, err
+		}
+		if strings.HasSuffix(node.NodeSelector.Path, "/.docforge/manifest.yaml") { // TODO assume all modules are defined in this way
+			repoName := repoURL[strings.LastIndex(repoURL, "/")+1:] // TODO index validation
+			compNode := &api.Node{Name: repoName}
+			versNode := &api.Node{Name: "vers", Nodes: []*api.Node{compNode}}
+			versNode.Properties = make(map[string]interface{})
+			FMP := make(map[string]interface{})
+			FMP["title"] = "Vers"
+			FMP["url"] = "/vers"
+			versNode.Properties["frontmatter"]=FMP
+
+			versNode.SetParent(node)
+			compNode.SetParent(versNode)
+
+			if node.Properties == nil {
+				node.Properties = make(map[string]interface{})
+			}
+
+			if _, found := node.Properties["frontmatter"]; !found {
+				node.Properties["frontmatter"] = make(map[string]interface{})
+			}
+			nodeFMP := node.Properties["frontmatter"].(map[string]interface{})
+
+			compNode.Properties = make(map[string]interface{})
+			cnFMP := make(map[string]interface{})
+			cnFMP["weight"] = nodeFMP["weight"]
+			cnFMP["title"] = nodeFMP["title"]
+			compNode.Properties["frontmatter"] = cnFMP
+			if nv, ok := r.Options.LastNVersions[repoURL]; ok && nv > 0 {
+
+				versList := []*vers{{Ver: "dev", Link: "/docs/" + repoName + "/"}}
+
+				//fmt.Println(nv)
+				//var defBranch string
+				//defBranch, err = rh.GetDefaultBranch(ctx, node.NodeSelector.Path)
+				//if err != nil {
+				//	return nil, err
+				//}
+				//fmt.Println(defBranch)
+				var verTags []string
+				verTags, err = rh.GetRepoLastNTags(ctx, node.NodeSelector.Path, nv)
+				//fmt.Println(verTags)
+				// TODO: As old version of manifest doesn't use relative paths current one can be taken as a basis
+				for i, v := range verTags {
+					vm, e := rh.ResolveDocumentationModuleVersion(ctx, node.NodeSelector.Path, v)
+					if e != nil {
+						return nil, err
+					}
+
+					vNode := &api.Node{Name: v, Nodes: vm.Structure, NodeSelector: vm.NodeSelector}
+					vNode.SetParent(compNode)
+
+					vm.NodeSelector = nil
+					vNode.SetParentsDownwards()
+					// resolve manifest structure names
+					if err = r.resolveNodeNames(vNode.Nodes); err != nil {
+						return nil, err
+					}
+
+					if vNode.NodeSelector != nil {
+						var selected *api.Node
+						selected, err = r.resolveNodeSelector(ctx, vNode, visited)
+						if err != nil {
+							return nil, err
+						}
+						vNode.NodeSelector = nil
+						if err = vNode.Union(selected.Nodes); err != nil {
+							return nil, err
+						}
+					}
+
+					compNode.Nodes = append(compNode.Nodes, vNode)
+
+					// copy to version node
+					vProps := make(map[string]interface{})
+					vProps["frontmatter"] = make(map[string]interface{})
+					vFMP := vProps["frontmatter"].(map[string]interface{})
+					for key, val := range nodeFMP {
+						vFMP[key] = val
+					}
+					vFMP["weight"] = i + 1
+					vFMP["title"] = v
+					vFMP["cver"] = v
+
+					versList = append(versList, &vers{Ver: v, Link: "/vers/" + repoName + "/" + v + "/"})
+					//delete(vFMP, "index")
+					vNode.Properties = vProps
+				}
+				if len(compNode.Nodes) > 0 {
+					result.Nodes = append(result.Nodes, versNode)
+					nodeFMP["vers"] = versList
+					for _, vn := range compNode.Nodes {
+						vnp := vn.Properties["frontmatter"].(map[string]interface{})
+						vnp["vers"] = versList
+					}
+				}
+			}
+		}
+		result.SetParentsDownwards()
 		return result, nil
 	}
 	// if path points to directory -> resolve node selector
@@ -149,6 +261,72 @@ func (r *Reactor) resolveNodeSelector(ctx context.Context, node *api.Node, visit
 		result.Cleanup()
 	}
 	return result, nil
+}
+
+type vers struct {
+	Ver  string `yaml:"ver,omitempty"`
+	Link string `yaml:"link,omitempty"`
+}
+
+func copyManifest(m *api.Documentation) *api.Documentation {
+	result := &api.Documentation{}
+	if m.NodeSelector != nil {
+		result.NodeSelector = copyNodeSelector(m.NodeSelector)
+	}
+	if len(m.Structure) > 0 {
+		for _, ch := range m.Structure {
+			result.Structure = append(result.Structure, copyNode(ch))
+		}
+	}
+	return result
+}
+
+func copyNode(n *api.Node) *api.Node {
+	r := &api.Node{
+		Name:   n.Name,
+		Source: n.Source,
+	}
+	if len(n.MultiSource) > 0 {
+		for _, ms := range n.MultiSource {
+			r.MultiSource = append(r.MultiSource, ms)
+		}
+	}
+	if len(n.Nodes) > 0 {
+		for _, ch := range n.Nodes {
+			r.Nodes = append(r.Nodes, copyNode(ch))
+		}
+	}
+	if n.NodeSelector != nil {
+		r.NodeSelector = copyNodeSelector(n.NodeSelector)
+	}
+	if len(n.Properties) > 0 {
+		r.Properties = make(map[string]interface{})
+		for k, v := range n.Properties {
+			r.Properties[k] = v
+		}
+	}
+	return r
+}
+
+func copyNodeSelector(ns *api.NodeSelector) *api.NodeSelector {
+	r := &api.NodeSelector{
+		Path:         ns.Path,
+		ExcludePaths: ns.ExcludePaths,
+		Depth:        ns.Depth,
+	}
+	if len(ns.ExcludeFrontMatter) > 0 {
+		r.ExcludeFrontMatter = make(map[string]interface{})
+		for k, v := range ns.ExcludeFrontMatter {
+			r.ExcludeFrontMatter[k] = v
+		}
+	}
+	if len(ns.FrontMatter) > 0 {
+		r.FrontMatter = make(map[string]interface{})
+		for k, v := range ns.FrontMatter {
+			r.FrontMatter[k] = v
+		}
+	}
+	return r
 }
 
 func isVisited(visited []string, path string) bool {

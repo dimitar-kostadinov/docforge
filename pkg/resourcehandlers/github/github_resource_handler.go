@@ -434,7 +434,7 @@ func (gh *GitHub) GetAllTags(ctx context.Context, rl *ResourceLocator) ([]string
 	if err != nil {
 		return nil, err
 	}
-	refString := []string{}
+	var refString []string
 	for _, ref := range refs {
 		parts := strings.Split(*ref.Ref, "refs/tags/")
 		refString = append(refString, parts[1])
@@ -617,4 +617,96 @@ func (gh *GitHub) GetRateLimit(ctx context.Context) (int, int, time.Time, error)
 		return -1, -1, time.Now(), err
 	}
 	return r.Core.Limit, r.Core.Remaining, r.Core.Reset.Time, nil
+}
+
+// GetDefaultBranch returns repo default branch for given URI
+func (gh *GitHub) GetDefaultBranch(ctx context.Context, uri string) (string, error) {
+	rl, err := gh.URLToGitHubLocator(context.Background(), uri, true) // TODO: do we need repo tree init?
+	if err != nil {
+		return "", err
+	}
+	// build repo resource locator
+	rl = &ResourceLocator{
+		Scheme: rl.Scheme,
+		Host:   rl.Host,
+		Owner:  rl.Owner,
+		Repo:   rl.Repo,
+		Type:   -1,
+	}
+	return GetDefaultBranch(context.Background(), gh.Client, rl)
+}
+
+// GetRepoLastNTags returns repo version for given URI sorted in descending order
+func (gh *GitHub) GetRepoLastNTags(ctx context.Context, uri string, n int) ([]string, error) {
+	rl, err := gh.URLToGitHubLocator(context.Background(), uri, true) // TODO: do we need repo tree init?
+	if err != nil {
+		return nil, err
+	}
+	// build repo resource locator
+	rl = &ResourceLocator{
+		Scheme: rl.Scheme,
+		Host:   rl.Host,
+		Owner:  rl.Owner,
+		Repo:   rl.Repo,
+		Type:   -1,
+	}
+	var allTags []string
+	allTags, err = gh.GetAllTags(ctx, rl)
+	if err != nil {
+		return nil, err
+	}
+	return api.GetLastNVersions(allTags, n)
+}
+
+func (gh *GitHub) GetRepoURL(ctx context.Context, uri string) (string, error) {
+	rl, err := gh.URLToGitHubLocator(context.Background(), uri, true) // TODO: do we need repo tree init?
+	if err != nil {
+		return "", err
+	}
+	// build repo resource locator
+	rl = &ResourceLocator{
+		Scheme: rl.Scheme,
+		Host:   rl.Host,
+		Owner:  rl.Owner,
+		Repo:   rl.Repo,
+		Type:   -1,
+	}
+	return rl.String(), nil
+}
+
+// ResolveDocumentationModuleVers for a given path and return it as a *api.Documentation
+func (gh *GitHub) ResolveDocumentationModuleVersion(ctx context.Context, path string, ver string) (*api.Documentation, error) {
+	rl, err := gh.URLToGitHubLocator(ctx, path, true)
+	if err != nil {
+		return nil, err
+	}
+	rl.SHAAlias = ver
+	// TODO: In cases where nodesSelector.Path is set to an url pointing to a resource with .md extension, it's
+	// considered as invalid. This is to avoid downloading the resource twice. Contemplate logic that caches
+	// the resource once read for later downloads.
+	if !(rl.Type == Blob || rl.Type == Raw) || urls.Ext(rl.String()) == ".md" {
+		return nil, nil
+	}
+	// here rl.SHAAlias on the right side is the repo current branch
+	// rl.SHAAlias = api.ChooseTargetBranch(path, rl.SHAAlias)
+	// getting nVersions based on configuration
+	// nVersions := api.ChooseNVersions(path)
+	//tags, err := gh.GetAllTags(ctx, rl)
+	tags := make([]string, 0, 0)
+	//if err != nil {
+	//	return nil, err
+	//}
+	blob, err := gh.Read(ctx, rl.String())
+	if err != nil {
+		return nil, err
+	}
+
+	doc, err := api.ParseWithMetadata(blob, tags, 0, rl.SHAAlias)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse manifest: %s. %+v", path, err)
+	}
+	if err = gh.resolveDocumentationRelativePaths(&api.Node{Nodes: doc.Structure, NodeSelector: doc.NodeSelector}, rl.String()); err != nil {
+		return nil, err
+	}
+	return doc, nil
 }

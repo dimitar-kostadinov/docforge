@@ -636,3 +636,20 @@ func (g *Git) GetRateLimit(ctx context.Context) (int, int, time.Time, error) {
 	}
 	return r.Core.Limit, r.Core.Remaining, r.Core.Reset.Time, nil
 }
+
+// GetDefaultBranch returns repo default branch for given URI
+func (g *Git) GetDefaultBranch(ctx context.Context, uri string) (string, error) {
+	return "", nil
+}
+// GetRepoLastNTags returns repo version for given URI sorted in descending order
+func (g *Git) GetRepoLastNTags(ctx context.Context, uri string, n int) ([]string, error) {
+	return nil, nil
+}
+// GetRepoURL returns
+func (g *Git)  GetRepoURL(ctx context.Context, uri string) (string, error) {
+	return "", nil
+}
+// ResolveDocumentationModuleVersion returns
+func (g *Git) ResolveDocumentationModuleVersion(ctx context.Context, path string, ver string) (*api.Documentation, error) {
+	return nil, nil
+}

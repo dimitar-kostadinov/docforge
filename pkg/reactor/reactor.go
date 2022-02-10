@@ -141,6 +141,44 @@ func (r *Reactor) Run(ctx context.Context, manifest *api.Documentation, dryRun b
 	if err := r.ResolveManifest(ctx, manifest); err != nil {
 		return fmt.Errorf("failed to resolve manifest: %s. %+v", r.Options.ManifestPath, err)
 	}
+	// create vnode
+	versNode := &api.Node{Name: "vers"}
+	versNode.Properties = make(map[string]interface{})
+	FMP := make(map[string]interface{})
+	FMP["title"] = "Vers"
+	FMP["url"] = "/vers"
+	versNode.Properties["frontmatter"]=FMP
+	manifest.Structure = append(manifest.Structure, versNode)
+	// move versions
+	// 1. find docs
+	var dn *api.Node
+	for _, d := range manifest.Structure {
+		if d.Name == "docs" {
+			dn = d
+			break
+		}
+	}
+
+	for _, cn := range dn.Nodes {
+		if len(cn.Nodes) > 1 {
+			ln := cn.Nodes[len(cn.Nodes) - 1]
+			if ln.Name == "vers" {
+				// move in versNode
+				versNode.Nodes = append(versNode.Nodes, ln.Nodes...)
+
+
+				for _, _v := range ln.Nodes {
+					propagateVersProps(_v)
+				}
+
+				// detach vers node
+				cn.Nodes = cn.Nodes[:len(cn.Nodes) - 1]
+
+				propagateVersProps(cn)
+			}
+		}
+	}
+	versNode.SetParentsDownwards()
 
 	if err := checkForCollisions(manifest.Structure); err != nil {
 		return err
@@ -157,6 +195,41 @@ func (r *Reactor) Run(ctx context.Context, manifest *api.Documentation, dryRun b
 	}
 
 	return nil
+}
+
+
+func propagateVersProps(n *api.Node) {
+	nfm := n.Properties["frontmatter"].(map[string]interface{})
+	for _ , cn := range n.Nodes {
+		if cn.Properties == nil {
+			cn.Properties = make(map[string]interface{})
+		}
+		if cnfmv, ok := cn.Properties["frontmatter"]; !ok {
+			cnfmv = make(map[string]interface{})
+			cn.Properties["frontmatter"] = cnfmv
+		}
+		cnfm := cn.Properties["frontmatter"].(map[string]interface{})
+		if nfm["cver"] != nil {
+			cnfm["cver"] = nfm["cver"]
+		}
+		if nfm["vers"] != nil {
+			nvl := []*vers{}
+			vl :=  nfm["vers"].([]*vers)
+			for _, mv := range vl {
+				vv := &vers{Ver: mv.Ver}
+				if cn.Name == "_index.md" {
+					vv.Link = mv.Link
+				} else {
+					vv.Link = mv.Link + strings.TrimSuffix(cn.Name, ".md") + "/"
+				}
+				nvl = append(nvl, vv)
+			}
+			cnfm["vers"] = nvl
+		}
+		if !cn.IsDocument() {
+			propagateVersProps(cn)
+		}
+	}
 }
 
 func (r *Reactor) fillSources(structure []*api.Node) {
